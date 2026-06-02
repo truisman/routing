@@ -34,7 +34,7 @@ class DVrouter(Router):
         """Recalculate the minimum costs and update the forwarding table using Bellman-Ford."""
         old_dv_self = self.dv.get(self.addr, {}).copy()
 
-        # Reset our own vector, but we always know the cost to ourselves is 0
+        # Reset our own vector
         self.dv[self.addr] = {self.addr: 0}
         new_forwarding_table = {}
 
@@ -157,4 +157,4 @@ class DVrouter(Router):
         """Representation for debugging in the network visualizer."""
         # TODO
         #   NOTE This method is for your own convenience and will not be graded
-        return f"DVrouter(addr={self.addr}, table={self.forwarding_table})"
+        return f"DVrouter(addr={self.addr})"
