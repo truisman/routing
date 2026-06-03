@@ -4,6 +4,7 @@
 # HUID:
 #####################################################
 
+import json
 from router import Router
 
 
@@ -22,7 +23,7 @@ class DVrouter(Router):
         # add your own class fields and initialization code here
 
         #Links to direct neighbors
-        self.links = {}
+        self.neighbor_links = {}
 
         #Distance Vector tracking
         self.dv = {self.addr: {self.addr: 0}}
@@ -34,12 +35,18 @@ class DVrouter(Router):
         """Recalculate the minimum costs and update the forwarding table using Bellman-Ford."""
         old_dv_self = self.dv.get(self.addr, {}).copy()
 
-        # Reset our own vector
-        self.dv[self.addr] = {self.addr: 0}
-        new_forwarding_table = {}
+        # Reset our own vector safely using a temporary tracking structure
+        new_dv_self = {self.addr: 0}
+        new_forwarding_table = {self.addr: None}
 
         # Find all possible destinations known to this router or any neighbor
-        all_destinations = set(self.dv.keys())
+        all_destinations = set()
+        for node, routes in self.dv.items():
+            all_destinations.update(routes.keys())
+        
+        # CRITICAL BOOTSTRAP FIX: Also consider direct neighbor destinations
+        for port, (neighbor, link_cost) in self.neighbor_links.items():
+            all_destinations.add(neighbor)
 
         for dst in all_destinations:
             if dst == self.addr:
@@ -49,30 +56,39 @@ class DVrouter(Router):
             best_port = None
 
             # Check costs through each of our directly connected neighbor links
-            for port, (neighbor, link_cost) in self.links.items():
+            for port, (neighbor, link_cost) in self.neighbor_links.items():
+                # Direct link path fallback
+                if dst == neighbor:
+                    if link_cost < min_cost:
+                        min_cost = link_cost
+                        best_port = port
+
                 # If the neighbor knows a path to the destination
-                if dst in self.dv and neighbor in self.dv[dst]:
-                    cost_through_neighbor = link_cost + self.dv[dst][neighbor]
+                if neighbor in self.dv and dst in self.dv[neighbor]:
+                    cost_through_neighbor = link_cost + self.dv[neighbor][dst]
                     if cost_through_neighbor < min_cost:
                         min_cost = cost_through_neighbor
                         best_port = port
 
             # If a valid path is found, update our vector and forwarding table
             if min_cost < float('inf'):
-                self.dv[self.addr][dst] = min_cost
+                new_dv_self[dst] = min_cost
                 new_forwarding_table[dst] = best_port
+
+        self.dv[self.addr] = new_dv_self
+        self.forwarding_table = new_forwarding_table
 
         # Check if our own distance vector changed. If so, broadcast to neighbors.
         if self.dv[self.addr] != old_dv_self:
-            self.forwarding_table = new_forwarding_table
             self._broadcast_dv()
 
     def _broadcast_dv(self):
         """Send the current router's distance vector to all connected neighbors."""
         # The packet payload is just our own distance vector dictionary: {dst: cost}
-        packet_content = self.dv[self.addr]
+        # Converted to a string representation to satisfy the simulator's type requirements
+        packet_content = json.dumps(self.dv[self.addr])
 
-        for port in self.links.keys():
+        for port in self.neighbor_links.keys():
             # Create a routing packet
             from packet import Packet
             pkt = Packet(kind=Packet.ROUTING, src_addr=self.addr, dst_addr=None, content=packet_content)
@@ -81,6 +97,7 @@ class DVrouter(Router):
     def handle_packet(self, port, packet):
         """Process incoming packet."""
         # TODO
+        from packet import Packet
         if packet.is_traceroute:
             # Hint: this is a normal data packet
             # If the forwarding table contains packet.dst_addr
@@ -102,18 +119,14 @@ class DVrouter(Router):
 
             # Routing packet: Contains a neighbor's distance vector
             neighbor_addr = packet.src_addr
-            neighbor_dv = packet.payload
+            
+            try:
+                neighbor_dv = json.loads(packet.content)
+            except (ValueError, TypeError):
+                return
 
             # Update what this neighbor can reach
-            for dst, cost in neighbor_dv.items():
-                if dst not in self.dv:
-                    self.dv[dst] = {}
-                self.dv[dst][neighbor_addr] = cost
-
-            # Remove destinations this neighbor no longer advertises
-            for dst in list(self.dv.keys()):
-                if dst != self.addr and neighbor_addr in self.dv[dst] and dst not in neighbor_dv:
-                    del self.dv[dst][neighbor_addr]
+            self.dv[neighbor_addr] = neighbor_dv
 
             #Recompute paths
             self._update_routing_table()
@@ -124,7 +137,7 @@ class DVrouter(Router):
         #   update the distance vector of this router
         #   update the forwarding table
         #   broadcast the distance vector of this router to neighbors
-        self.links[port] = (endpoint, cost)
+        self.neighbor_links[port] = (endpoint, cost)
         self._update_routing_table()
 
     def handle_remove_link(self, port):
@@ -133,14 +146,13 @@ class DVrouter(Router):
         #   update the distance vector of this router
         #   update the forwarding table
         #   broadcast the distance vector of this router to neighbors
-        if port in self.links:
-            neighbor, _ = self.links[port]
-            del self.links[port]
+        if port in self.neighbor_links:
+            neighbor, _ = self.neighbor_links[port]
+            del self.neighbor_links[port]
 
             #Neighbor clean up
-            for dst in list(self.dv.keys()):
-                if neighbor in self.dv[dst]:
-                    del self.dv[dst][neighbor]
+            if neighbor in self.dv:
+                del self.dv[neighbor]
 
             self._update_routing_table()
 
@@ -151,7 +163,7 @@ class DVrouter(Router):
             # TODO
             #   broadcast the distance vector of this router to neighbors
             # Periodic updates
-            self._broastcast_dv()
+            self._broadcast_dv()
 
     def __repr__(self):
         """Representation for debugging in the network visualizer."""
