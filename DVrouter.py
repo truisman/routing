@@ -44,7 +44,7 @@ class DVrouter(Router):
         for node, routes in self.dv.items():
             all_destinations.update(routes.keys())
         
-        # CRITICAL BOOTSTRAP FIX: Also consider direct neighbor destinations
+        # Also consider direct neighbor destinations
         for port, (neighbor, link_cost) in self.neighbor_links.items():
             all_destinations.add(neighbor)
 
